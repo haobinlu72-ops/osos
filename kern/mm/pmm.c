@@ -1,6 +1,9 @@
 #include <default_pmm.h>
 #include <best_fit_pmm.h>
 #include <buddy_pmm.h>
+#ifdef LAB2_USE_SLUB
+#include <slub.h>
+#endif
 #include <defs.h>
 #include <error.h>
 #include <memlayout.h>
@@ -35,7 +38,11 @@ static void check_alloc_page(void);
 
 // init_pmm_manager - initialize a pmm_manager instance
 static void init_pmm_manager(void) {
+#ifdef LAB2_USE_BUDDY
+    pmm_manager = &buddy_pmm_manager;
+#else
     pmm_manager = &best_fit_pmm_manager;
+#endif
     cprintf("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
@@ -63,44 +70,50 @@ size_t nr_free_pages(void) {
 }
 
 //lab2 function1 2412950
-
 static void page_init(void) {
     uint64_t base = get_memory_base();
     uint64_t size = get_memory_size();
     if (base != DRAM_BASE || size == 0 || size > ~(uint64_t)0 - base) {
         panic("invalid DTB memory range");
     }
-    uint64_t ram_end = base + size;
-    va_pa_offset = KERNBASE - KERNEL_BEGIN_PADDR;
-    uintptr_t limit = ram_end < PHYSICAL_MEMORY_END ? ram_end : PHYSICAL_MEMORY_END;
-    limit = ROUNDDOWN(limit, PGSIZE);
-    if (limit <= KERNEL_BEGIN_PADDR) {
-        panic("RAM does not cover kernel");
+
+    va_pa_offset = PHYSICAL_MEMORY_OFFSET;
+    uint64_t memory_end = base + size;
+    uintptr_t end_pa = memory_end < PHYSICAL_MEMORY_END
+                           ? memory_end : PHYSICAL_MEMORY_END;
+    end_pa = ROUNDDOWN(end_pa, PGSIZE);
+    if (end_pa <= KERNEL_BEGIN_PADDR) {
+        panic("RAM does not cover the kernel");
     }
-    npage = PPN(limit);
-    size_t count = npage - nbase;
+    npage = PPN(end_pa);
+
     extern char end[];
-    uintptr_t kernel_end = PADDR(end);
-    if (kernel_end < KERNEL_BEGIN_PADDR || kernel_end > limit) {
-        panic("kernel outside managed RAM");
+    uintptr_t kernel_end_pa = PADDR(end);
+    if (kernel_end_pa < KERNEL_BEGIN_PADDR || kernel_end_pa > end_pa) {
+        panic("kernel is outside managed RAM");
     }
-    uintptr_t desc_pa = ROUNDUP(kernel_end, PGSIZE);
-    if (desc_pa > limit || count > (limit - desc_pa) / sizeof(struct Page)) {
-        panic("not enough RAM for Page descriptors");
+
+    size_t descriptor_count = npage - nbase;
+    uintptr_t descriptor_pa = ROUNDUP(kernel_end_pa, PGSIZE);
+    if (descriptor_pa > end_pa ||
+        descriptor_count > (end_pa - descriptor_pa) / sizeof(struct Page)) {
+        panic("insufficient RAM for page descriptors");
     }
-    pages = (struct Page *)(desc_pa + va_pa_offset);
-    for (size_t i = 0; i < count; i++) {
+
+    pages = (struct Page *)(descriptor_pa + va_pa_offset);
+    for (size_t i = 0; i < descriptor_count; ++i) {
         pages[i].flags = 0;
         pages[i].property = 0;
         set_page_ref(&pages[i], 0);
         SetPageReserved(&pages[i]);
         list_init(&pages[i].page_link);
     }
-    uintptr_t free_begin = ROUNDUP(desc_pa + count * sizeof(struct Page), PGSIZE);
-    cprintf("physical memory: [0x%016lx, 0x%016lx)\n", base, ram_end);
-    cprintf("managed memory ends at 0x%016lx; free begins at 0x%016lx\n", limit, free_begin);
-    if (free_begin < limit) {
-        init_memmap(pa2page(free_begin), (limit - free_begin) / PGSIZE);
+
+    uintptr_t free_begin = ROUNDUP(
+        descriptor_pa + descriptor_count * sizeof(struct Page), PGSIZE);
+    cprintf("physical memory: [0x%016lx, 0x%016lx)\n", base, memory_end);
+    if (free_begin < end_pa) {
+        init_memmap(pa2page(free_begin), (end_pa - free_begin) / PGSIZE);
     }
 }
 
@@ -119,6 +132,12 @@ void pmm_init(void) {
 
     // use pmm->check to verify the correctness of the alloc/free function in a pmm
     check_alloc_page();
+
+#ifdef LAB2_USE_SLUB
+    /* Lab2 optional challenge: run the slab-object tests over this PMM. */
+    slub_init();
+    slub_check();
+#endif
 
     extern char boot_page_table_sv39[];
     satp_virtual = (pte_t*)boot_page_table_sv39;
