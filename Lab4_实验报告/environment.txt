@@ -1,0 +1,6 @@
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+6.18.33.2-microsoft-standard-WSL2
+riscv64-unknown-elf-gcc (SiFive GCC-Metal 10.2.0-2020.12.8) 10.2.0
+QEMU emulator version 4.1.1
+GNU Make 4.3
+GNU gdb (Ubuntu 12.1-0ubuntu1~22.04.2) 12.1
